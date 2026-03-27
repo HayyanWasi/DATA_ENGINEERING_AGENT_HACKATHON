@@ -174,11 +174,17 @@ name = "backend"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "fastapi" },
     { name = "google-adk" },
+    { name = "python-dotenv" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "google-adk", specifier = ">=1.28.0" }]
+requires-dist = [
+    { name = "fastapi", specifier = ">=0.135.2" },
+    { name = "google-adk", specifier = ">=1.28.0" },
+    { name = "python-dotenv", specifier = ">=1.2.2" },
+]
 
 [[package]]
 name = "certifi"
