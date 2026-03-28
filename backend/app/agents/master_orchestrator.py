@@ -34,6 +34,7 @@ from app.agents.mt_orchestrator_agent import run_mt_orchestrator
 from app.agents.ms_orchestrator_agent import run_ms_orchestrator
 from app.agents.ht_orchestrator_agent import run_ht_orchestrator
 from app.agents.me_orchestrator_agent import run_me_orchestrator
+from app.agents.fo_orchestrator_agent import run_fo_orchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -513,13 +514,40 @@ async def run_full_pipeline(
     final_model_name = str(me_result.get("final_model_name", final_model_name))
 
     # ─────────────────────────────────────────────────────────────────────────
+    # STAGE 10 — Final Output  (non-blocking)
+    # ─────────────────────────────────────────────────────────────────────────
+    stage_start = time.time()
+    logger.info("[STAGE 10/10] Final Output starting...")
+    _log("[STAGE 10/10] Final Output starting.")
+    fo_result: dict[str, Any] = {"status": "skipped"}
+    try:
+        fo_result = await run_fo_orchestrator(
+            me_result=me_result,
+            mt_result=mt_result,
+            ht_result=ht_result,
+            dataset_id=dataset_id,
+            target_col=target_col,
+        )
+        stages_completed += 1
+        elapsed = round(time.time() - stage_start, 2)
+        logger.info(f"[STAGE 10/10] Final Output complete — {elapsed}s")
+        _log(f"[STAGE 10/10] Final Output complete ({elapsed}s).")
+    except Exception as exc:
+        elapsed = round(time.time() - stage_start, 2)
+        msg = f"Final Output failed: {exc}"
+        errors.append(msg)
+        logger.warning(f"[STAGE 10/10] Final Output failed — continuing. {msg}")
+        _log(f"[STAGE 10/10] Final Output failed — continuing ({elapsed}s).")
+        fo_result = {"status": "skipped", "errors": [msg]}
+
+    # ─────────────────────────────────────────────────────────────────────────
     # Final structured result
     # ─────────────────────────────────────────────────────────────────────────
     elapsed_total = round(time.time() - pipeline_start, 2)
     logger.info(
-        f"[PIPELINE] Complete — {stages_completed}/9 stages in {elapsed_total}s."
+        f"[PIPELINE] Complete — {stages_completed}/10 stages in {elapsed_total}s."
     )
-    _log(f"Pipeline complete — {stages_completed}/9 stages in {elapsed_total}s.")
+    _log(f"Pipeline complete — {stages_completed}/10 stages in {elapsed_total}s.")
 
     return {
         "status": "success",
@@ -551,7 +579,9 @@ async def run_full_pipeline(
             "report": "outputs/final_report.pdf",
             "cleaned_data": "outputs/cleaned_data.csv",
             "evaluation_summary": "outputs/evaluation_summary.json",
+            "results_manifest": "outputs/results_manifest.json",
         },
+        "final_output": fo_result,
         "errors": errors,
         "pipeline_log": "\n".join(log_lines),
         "elapsed_seconds": elapsed_total,

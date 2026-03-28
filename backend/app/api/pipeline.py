@@ -18,7 +18,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -100,6 +100,19 @@ def _load_evaluation_summary() -> dict[str, Any]:
         return {}
 
 
+def _load_results_manifest() -> dict[str, Any]:
+    """Read outputs/results_manifest.json — the single source of truth for the UI."""
+    path = "outputs/results_manifest.json"
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, "r") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
 def _available_downloads(dataset_id: str) -> list[dict[str, str]]:
     """Return download links for files that currently exist on disk."""
     links: list[dict[str, str]] = []
@@ -123,15 +136,16 @@ def _infer_pipeline_status() -> tuple[str, int, str]:
         (status, stages_completed, last_stage)
     """
     stages = [
-        ("cleaned_data.csv",         "Data Cleaning",         1),
-        ("eda_stats.json",            "EDA",                   2),
-        ("engineered_data.csv",       "Feature Engineering",   3),
-        ("scaling_summary.json",      "Feature Scaling",       4),
-        ("balance_report.json",       "Class Imbalance",       5),
-        ("training_results.json",     "Model Training",        6),
-        ("model_selection_summary.json", "Model Selection",    7),
-        ("tuning_results.json",       "Hyperparameter Tuning", 8),
-        ("evaluation_summary.json",   "Model Evaluation",      9),
+        ("cleaned_data.csv",          "Data Cleaning",         1),
+        ("eda_stats.json",             "EDA",                   2),
+        ("engineered_data.csv",        "Feature Engineering",   3),
+        ("scaling_summary.json",       "Feature Scaling",       4),
+        ("balance_report.json",        "Class Imbalance",       5),
+        ("training_results.json",      "Model Training",        6),
+        ("model_selection_summary.json","Model Selection",      7),
+        ("tuning_results.json",        "Hyperparameter Tuning", 8),
+        ("evaluation_summary.json",    "Model Evaluation",      9),
+        ("results_manifest.json",      "Final Output",         10),
     ]
     last_stage = ""
     stages_completed = 0
@@ -142,8 +156,8 @@ def _infer_pipeline_status() -> tuple[str, int, str]:
 
     if stages_completed == 0:
         return "pending", 0, ""
-    if stages_completed == 9:
-        return "complete", 9, last_stage
+    if stages_completed == 10:
+        return "complete", 10, last_stage
     return "running", stages_completed, last_stage
 
 
@@ -279,19 +293,16 @@ async def pipeline_status(
 # ENDPOINT 3 — GET /api/results/{dataset_id}
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.get(
-    "/api/results/{dataset_id}",
-    response_model=PipelineResultsResponse,
-)
+@router.get("/api/results/{dataset_id}")
 async def get_results(
     dataset_id: str,
     db: AsyncSession = Depends(get_db),
-) -> PipelineResultsResponse:
+) -> JSONResponse:
     """
     Return full pipeline results for the Next.js frontend.
 
-    Reads outputs/evaluation_summary.json and returns it alongside
-    links to all available downloadable files.
+    Prefers outputs/results_manifest.json (written by Final Output Agent).
+    Falls back to outputs/evaluation_summary.json for backward compatibility.
     """
     try:
         dataset_uuid = uuid.UUID(dataset_id)
@@ -306,21 +317,24 @@ async def get_results(
             status_code=404, detail=f"Dataset '{dataset_id}' not found."
         )
 
+    # Prefer the full manifest written by Stage 10
+    manifest = _load_results_manifest()
+    if manifest:
+        return JSONResponse(content=manifest)
+
+    # Backward-compat: return evaluation_summary if manifest not yet written
     evaluation_summary = _load_evaluation_summary()
     if not evaluation_summary:
         raise HTTPException(
             status_code=404,
-            detail=(
-                "Pipeline results not found. "
-                "Run POST /api/pipeline/run first."
-            ),
+            detail="Pipeline results not found. Run POST /api/pipeline/run first.",
         )
 
-    return PipelineResultsResponse(
-        dataset_id=dataset_id,
-        evaluation_summary=evaluation_summary,
-        available_downloads=_available_downloads(dataset_id),
-    )
+    return JSONResponse(content={
+        "dataset_id": dataset_id,
+        "evaluation_summary": evaluation_summary,
+        "available_downloads": _available_downloads(dataset_id),
+    })
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -380,4 +394,41 @@ async def download_file(
         path=file_path,
         media_type=media_type,
         filename=os.path.basename(file_path),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ENDPOINT 5 — GET /api/charts/{dataset_id}/{filename}
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get("/api/charts/{dataset_id}/{filename}")
+async def get_chart(
+    dataset_id: str,
+    filename: str,
+) -> FileResponse:
+    """
+    Serve an EDA or evaluation chart image.
+
+    Searches charts/ directory for the requested filename.
+    Returns 404 if not found.
+    """
+    # Sanitise filename — no path traversal
+    safe_name = os.path.basename(filename)
+    candidates = [
+        f"charts/{safe_name}",
+        f"outputs/charts/{safe_name}",
+        f"outputs/{safe_name}",
+    ]
+    for path in candidates:
+        if os.path.isfile(path):
+            ext = safe_name.rsplit(".", 1)[-1].lower()
+            media_map = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "svg": "image/svg+xml"}
+            return FileResponse(
+                path=path,
+                media_type=media_map.get(ext, "application/octet-stream"),
+                filename=safe_name,
+            )
+    raise HTTPException(
+        status_code=404,
+        detail=f"Chart '{safe_name}' not found.",
     )

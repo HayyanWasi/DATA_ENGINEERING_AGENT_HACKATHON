@@ -10,6 +10,7 @@ type DownloadCardProps = {
   type: DownloadType;
   fileName: string;
   description: string;
+  onDownload?: () => void;
 };
 
 const styles: Record<
@@ -39,7 +40,7 @@ const styles: Record<
   },
 };
 
-export function DownloadCard({ type, fileName, description }: DownloadCardProps) {
+export function DownloadCard({ type, fileName, description, onDownload }: DownloadCardProps) {
   const style = styles[type];
   const Icon = style.icon;
 
@@ -59,7 +60,9 @@ export function DownloadCard({ type, fileName, description }: DownloadCardProps)
       <p className="mb-4 grow text-sm text-zinc-400">{description}</p>
       <motion.div whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.97 }}>
         <Button
-          className={`h-12 w-full rounded-xl border-0 bg-gradient-to-r ${style.buttonGradient} hover:from-indigo-400 hover:via-blue-400 hover:to-cyan-400 text-white font-semibold shadow-lg ${style.buttonGlow} relative overflow-hidden`}
+          onClick={onDownload}
+          disabled={!onDownload}
+          className={`h-12 w-full rounded-xl border-0 bg-gradient-to-r ${style.buttonGradient} hover:from-indigo-400 hover:via-blue-400 hover:to-cyan-400 text-white font-semibold shadow-lg ${style.buttonGlow} relative overflow-hidden disabled:opacity-50 disabled:cursor-not-allowed`}
         >
           <motion.div
             aria-hidden

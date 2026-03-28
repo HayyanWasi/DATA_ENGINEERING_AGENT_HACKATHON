@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
   Database,
@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { motion } from "motion/react";
 import { Navbar } from "@/components/Navbar";
+import { importDataset } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -27,30 +28,41 @@ export default function Upload() {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isHovering, setIsHovering] = useState(false);
-  
+  const [datasetId, setDatasetId] = useState<string>("");
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFileUpload = (file: File) => {
-    console.log("File upload initiated:", file.name);
+  const handleFileUpload = useCallback((file: File) => {
     setIsUploading(true);
     setUploadProgress(0);
+    setUploadError(null);
 
+    // Animate progress to 80% while upload is in flight
     const interval = setInterval(() => {
-      setUploadProgress((prev) => {
-        if (prev >= 100) {
-          clearInterval(interval);
-          setTimeout(() => {
-            console.log("Setting fileName to:", file.name);
-            setFileName(file.name);
-            setIsUploading(false);
-            setUploadProgress(0);
-          }, 300);
-          return 100;
-        }
-        return prev + 5;
-      });
+      setUploadProgress((prev) => (prev >= 80 ? prev : prev + 4));
     }, 80);
-  };
+
+    importDataset(file)
+      .then((res) => {
+        clearInterval(interval);
+        setUploadProgress(100);
+        setTimeout(() => {
+          setDatasetId(res.dataset_id);
+          setFileName(file.name);
+          setIsUploading(false);
+          setUploadProgress(0);
+        }, 300);
+      })
+      .catch((err) => {
+        clearInterval(interval);
+        setIsUploading(false);
+        setUploadProgress(0);
+        setUploadError(String(err));
+        // Still allow manual filename entry as fallback
+        setFileName(file.name);
+      });
+  }, []);
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
@@ -69,14 +81,15 @@ export default function Upload() {
   };
 
   const handleRunPipeline = () => {
-    console.log("Button clicked! fileName:", fileName, "targetColumn:", targetColumn);
-    if (fileName && targetColumn) {
-      console.log("Both fields present, navigating to results...");
+    if (!fileName || !targetColumn) return;
+    if (datasetId) {
+      // Real flow: go to pipeline progress page (which fires the run)
       const query = new URLSearchParams({ fileName, targetColumn }).toString();
-      console.log("Query string:", query);
-      router.push(`/results?${query}`);
+      router.push(`/pipeline/${datasetId}?${query}`);
     } else {
-      console.log("Missing fields - fileName:", !!fileName, "targetColumn:", !!targetColumn);
+      // Fallback (no backend): go directly to results with mock data
+      const query = new URLSearchParams({ fileName, targetColumn }).toString();
+      router.push(`/results?${query}`);
     }
   };
 
