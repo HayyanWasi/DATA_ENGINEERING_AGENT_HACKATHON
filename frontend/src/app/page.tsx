@@ -4,7 +4,6 @@ import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
   Database,
-  BarChart3,
   Brain,
   FileText,
   Sparkles,
@@ -709,9 +708,8 @@ function FrostedInput({
 
 function FeaturePills() {
   const features = [
-    { icon: BarChart3, text: "EDA Charts", gradient: "from-green-500 to-emerald-500", delay: 0 },
-    { icon: Brain, text: "3 Models Trained", gradient: "from-purple-500 to-pink-500", delay: 0.1 },
-    { icon: FileText, text: "PDF Report", gradient: "from-orange-500 to-yellow-500", delay: 0.2 },
+    { icon: Brain, text: "3 Models Trained", gradient: "from-purple-500 to-pink-500", delay: 0 },
+    { icon: FileText, text: "PDF Report", gradient: "from-orange-500 to-yellow-500", delay: 0.1 },
   ];
 
   return (
