@@ -25,6 +25,7 @@ import time
 from typing import Any
 
 from app.tools.executor_tools import _SANDBOX
+from app.tools.content_guardrail import check_content_guardrail
 from app.agents.data_cleaning_orchestrator_agent import run_pipeline as _run_dc
 from app.agents.eda_orchestrator_agent import run_eda_pipeline as _run_eda
 from app.agents.fe_orchestrator_agent import run_fe_orchestrator
@@ -224,6 +225,29 @@ async def run_full_pipeline(
 
     def _log(msg: str) -> None:
         log_lines.append(f"[{time.strftime('%H:%M:%S')}] {msg}")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # PRE-FLIGHT — Content Safety Guardrail  (blocking)
+    # ─────────────────────────────────────────────────────────────────────────
+    logger.info("[GUARDRAIL] Content safety check starting...")
+    _log("[GUARDRAIL] Content safety check starting.")
+    column_names = list(records[0].keys()) if records else []
+    guardrail = check_content_guardrail(
+        records=records,
+        target_column=target_col,
+        column_names=column_names,
+    )
+    if not guardrail["allowed"]:
+        logger.warning(
+            f"[GUARDRAIL] Dataset REJECTED — {len(guardrail['violations'])} violation(s)."
+        )
+        _log("[GUARDRAIL] Dataset REJECTED.")
+        raise PipelineStageError(
+            "Content Safety Guardrail",
+            ValueError(guardrail["message"]),
+        )
+    logger.info("[GUARDRAIL] Content safety check passed.")
+    _log("[GUARDRAIL] Content safety check passed.")
 
     # ─────────────────────────────────────────────────────────────────────────
     # STAGE 1 — Data Cleaning  (blocking)

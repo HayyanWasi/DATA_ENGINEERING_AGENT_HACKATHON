@@ -3,11 +3,11 @@ app/agents/fo_orchestrator_agent.py
 
 Final Output Orchestrator — Stage 10 of the ML pipeline.
 
-Single-phase pipeline:
-    Executor — verify files → save joblib → build results_manifest.json → verify
-
-Inputs come from stages 6 (MT), 8 (HT), and 9 (ME).
-Additional context (eda_charts, dataset_stats) is resolved from disk.
+Pipeline (single phase):
+    STEP 1 — Build pipeline summary from sandbox variables + JSON files on disk
+    STEP 2 — Save final model as joblib (PipelineStageError on failure)
+    STEP 3 — Run FO executor agent (dataset_id + pipeline_summary)
+    STEP 4 — Load and return results_manifest.json
 
 Usage:
     from app.agents.fo_orchestrator_agent import run_fo_orchestrator
@@ -18,58 +18,19 @@ Usage:
 
 from __future__ import annotations
 
-import glob
 import logging
 import os
 from typing import Any
 
-from app.tools.fo_tools import load_json_safe
+from app.tools.executor_tools import _SANDBOX
+from app.tools.fo_tools import (
+    collect_output_files,
+    get_pipeline_summary,
+    load_json_safe,
+    save_model_as_joblib,
+)
 
 logger = logging.getLogger(__name__)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Private helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _collect_eda_charts() -> list[str]:
-    """
-    Gather EDA chart file paths from the charts/ directory.
-    Returns relative paths suitable for GET /api/charts/{dataset_id}/{filename}.
-    """
-    charts: list[str] = []
-    for ext in ("*.png", "*.jpg", "*.jpeg", "*.svg"):
-        charts.extend(glob.glob(f"charts/{ext}"))
-    charts.sort()
-    return charts
-
-
-def _compute_dataset_stats() -> dict[str, Any]:
-    """
-    Estimate row/feature counts from disk files.
-
-    Priority: training_results.json → engineered_data.csv (line count) → cleaned_data.csv
-    """
-    # Try training_results.json first (most reliable)
-    tr = load_json_safe("outputs/training_results.json")
-    if tr:
-        rows = int(tr.get("train_samples", 0)) + int(tr.get("test_samples", 0))
-        features = int(tr.get("feature_count", tr.get("n_features", 0)))
-        if rows > 0 or features > 0:
-            return {"rows": rows, "features": features}
-
-    # Fall back to counting lines in engineered_data.csv
-    for csv_path in ("outputs/engineered_data.csv", "outputs/cleaned_data.csv"):
-        if os.path.isfile(csv_path):
-            try:
-                with open(csv_path, "r", encoding="utf-8") as f:
-                    lines = sum(1 for _ in f)
-                rows = max(0, lines - 1)  # subtract header
-                return {"rows": rows, "features": 0}
-            except Exception:
-                pass
-
-    return {"rows": 0, "features": 0}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -84,101 +45,133 @@ async def run_fo_orchestrator(
     target_col: str,
 ) -> dict[str, Any]:
     """
-    Run Stage 10 — Final Output — for one dataset.
+    Run Stage 10 — Final Output.
 
-    Collects EDA charts, computes dataset stats, invokes the FO executor
-    agent to save final_model.joblib and build results_manifest.json.
+    STEP 1 — Build pipeline summary using get_pipeline_summary(_SANDBOX) and
+             load_json_safe() for stage JSON files on disk.
+    STEP 2 — Save final_model to outputs/final_model.joblib via
+             save_model_as_joblib().  Raises PipelineStageError if the model
+             is None (i.e. training never completed).
+    STEP 3 — Run FO executor agent, passing dataset_id and pipeline_summary.
+    STEP 4 — Load outputs/results_manifest.json and build the return dict.
 
     Args:
-        me_result:   Output from run_me_orchestrator()
-        mt_result:   Output from run_mt_orchestrator()
-        ht_result:   Output from run_ht_orchestrator()
-        dataset_id:  UUID string of the dataset
-        target_col:  ML target column name
+        me_result:   Output from run_me_orchestrator() — kept for backward compat.
+        mt_result:   Output from run_mt_orchestrator() — kept for backward compat.
+        ht_result:   Output from run_ht_orchestrator() — kept for backward compat.
+        dataset_id:  UUID string of the dataset.
+        target_col:  ML target column name.
 
     Returns:
         {
-            "status":        "success" | "error",
-            "manifest":      dict (contents of results_manifest.json),
-            "execution_log": str,
-            "dataset_id":    str,
-            "target_col":    str,
+            "status":                   "success" | "partial",
+            "dataset_id":               str,
+            "output_files":             dict,
+            "pipeline_summary":         dict,
+            "eda_section":              dict,
+            "model_evaluation_section": dict,
+            "downloads":                list,
+            "next_phase":               "complete",
         }
+
+    Raises:
+        PipelineStageError: if save_model_as_joblib() raises (model is None).
     """
+    # Lazy import to avoid circular dependency with master_orchestrator
+    from app.agents.master_orchestrator import PipelineStageError
     from app.agents.final_output_agent.executor_agent import run_fo_executor
 
-    logger.info("[FO] Final Output Orchestrator starting.")
+    # ── STEP 1: Build pipeline summary ───────────────────────────────────────
+    logger.info("[FO] STEP 1 — Building pipeline summary.")
+    pipeline_summary = get_pipeline_summary(_SANDBOX)
+    model_name = pipeline_summary.get("model_info", {}).get("final_model_name", "?")
+    accuracy   = pipeline_summary.get("metrics", {}).get("accuracy", 0.0)
+    logger.info(f"[FO] Pipeline summary built — model={model_name}, accuracy={accuracy:.4f}.")
 
-    # Resolve context from disk
-    eda_charts = _collect_eda_charts()
-    dataset_stats = _compute_dataset_stats()
-    elapsed_seconds = float(me_result.get("elapsed_seconds", 0.0))
-
-    logger.info(
-        f"[FO] EDA charts found: {len(eda_charts)}, "
-        f"dataset rows: {dataset_stats.get('rows', 0)}"
-    )
-
-    orchestrator_input: dict[str, Any] = {
-        "me_result":       me_result,
-        "mt_result":       mt_result,
-        "ht_result":       ht_result,
-        "dataset_id":      dataset_id,
-        "target_col":      target_col,
-        "eda_charts":      eda_charts,
-        "elapsed_seconds": elapsed_seconds,
-        "dataset_stats":   dataset_stats,
-    }
-
+    # ── STEP 2: Save model as joblib ──────────────────────────────────────────
+    logger.info("[FO] STEP 2 — Saving final_model to outputs/final_model.joblib.")
     try:
-        fo_result = await run_fo_executor(orchestrator_input)
+        model_path = save_model_as_joblib()
+        model_size = os.path.getsize(model_path)
+        logger.info(f"[FO] Model saved: {model_path} ({model_size:,} bytes).")
     except Exception as exc:
-        logger.error(f"[FO] Executor failed: {exc}")
-        return {
-            "status":        "error",
-            "manifest":      {},
-            "execution_log": str(exc),
-            "dataset_id":    dataset_id,
-            "target_col":    target_col,
-        }
+        logger.error(f"[FO] save_model_as_joblib failed — {exc}")
+        raise PipelineStageError("Final Output", exc)
 
-    # Load the manifest written by the executor
+    # ── STEP 3: Run executor agent ────────────────────────────────────────────
+    logger.info("[FO] STEP 3 — Running FO executor agent.")
+    fo_result: dict[str, Any] = {}
+    try:
+        fo_result = await run_fo_executor(
+            {
+                "dataset_id":       dataset_id,
+                "target_col":       target_col,
+                "pipeline_summary": pipeline_summary,
+                # Kept for backward compat with executor's user_message builder
+                "me_result":        me_result,
+                "mt_result":        mt_result,
+                "ht_result":        ht_result,
+            }
+        )
+        logger.info(f"[FO] Executor complete. Status: {fo_result.get('status', '?')}.")
+    except Exception as exc:
+        logger.warning(f"[FO] Executor agent failed: {exc} — continuing to manifest load.")
+
+    # ── STEP 4: Load manifest from disk ──────────────────────────────────────
+    logger.info("[FO] STEP 4 — Loading results_manifest.json.")
     manifest = load_json_safe("outputs/results_manifest.json")
     if not manifest:
-        logger.warning("[FO] results_manifest.json not found after executor run.")
+        logger.warning("[FO] results_manifest.json not found or empty after executor run.")
+
+    # Collect all output files that are present on disk
+    scanned = collect_output_files()
+
+    # Extract manifest sections (empty dicts/lists if executor failed)
+    eda_section:        dict[str, Any]        = dict(manifest.get("eda_section", {}))
+    model_eval_section: dict[str, Any]        = dict(manifest.get("model_evaluation_section", {}))
+    downloads:          list[dict[str, Any]]  = list(manifest.get("downloads", []))
 
     logger.info(
-        f"[FO] Final Output complete. "
-        f"Model: {manifest.get('pipeline_summary', {}).get('model_used', '?')}. "
-        f"Downloads: {len(manifest.get('downloads', []))}."
+        f"[FO] Final Output complete — model={model_name}, "
+        f"downloads={len(downloads)}, "
+        f"eda_charts={len(eda_section.get('charts', []))}."
     )
 
     return {
-        "status":        "success" if manifest else "partial",
-        "manifest":      manifest,
-        "execution_log": fo_result.get("execution_log", ""),
-        "verify_manifest": fo_result.get("verify_manifest", ""),
-        "dataset_id":    dataset_id,
-        "target_col":    target_col,
+        "status":                   "success" if manifest else "partial",
+        "dataset_id":               dataset_id,
+        "output_files":             {
+            "model_files":       scanned["model_files"],
+            "data_files":        scanned["data_files"],
+            "evaluation_charts": scanned["evaluation_charts"],
+            "eda_charts":        scanned["eda_charts"],
+            "json_reports":      scanned["json_reports"],
+        },
+        "pipeline_summary":         pipeline_summary,
+        "eda_section":              eda_section,
+        "model_evaluation_section": model_eval_section,
+        "downloads":                downloads,
+        "next_phase":               "complete",
     }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Thin ADK agent shim — kept for __init__.py consistency with other stages
-# ─────────────────────────────────────────────────────────────----------─────
+# ─────────────────────────────────────────────────────────────────────────────
 
-from google.adk.agents import Agent
+from google.adk.agents import Agent  # noqa: E402
 
 fo_orchestrator_agent = Agent(
     name="fo_orchestrator_agent",
     model="gemini-2.0-flash",
     description=(
-        "Orchestrates the Final Output stage: saves final_model.joblib "
-        "and builds results_manifest.json for the Next.js frontend."
+        "Orchestrates the Final Output stage: builds pipeline summary from the "
+        "sandbox, saves final_model.joblib, and builds results_manifest.json "
+        "for the Next.js frontend."
     ),
     instruction=(
         "You coordinate the Final Output stage. "
-        "Delegate all work to run_fo_executor via run_fo_orchestrator()."
+        "Delegate all work to run_fo_orchestrator()."
     ),
     tools=[],
 )

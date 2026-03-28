@@ -87,45 +87,18 @@ _DOWNLOAD_MAP: dict[str, tuple[str, str]] = {
 }
 
 
-def _load_evaluation_summary() -> dict[str, Any]:
-    """Read outputs/evaluation_summary.json if it exists."""
-    path = "outputs/evaluation_summary.json"
-    if not os.path.isfile(path):
-        return {}
-    try:
-        with open(path, "r") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
-
-
 def _load_results_manifest() -> dict[str, Any]:
     """Read outputs/results_manifest.json — the single source of truth for the UI."""
     path = "outputs/results_manifest.json"
     if not os.path.isfile(path):
         return {}
     try:
-        with open(path, "r") as f:
+        with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, dict) else {}
     except Exception:
         return {}
 
-
-def _available_downloads(dataset_id: str) -> list[dict[str, str]]:
-    """Return download links for files that currently exist on disk."""
-    links: list[dict[str, str]] = []
-    for file_type, (path, _) in _DOWNLOAD_MAP.items():
-        if os.path.isfile(path):
-            links.append(
-                {
-                    "file_type": file_type,
-                    "url": f"/api/download/{dataset_id}/{file_type}",
-                    "path": path,
-                }
-            )
-    return links
 
 
 def _infer_pipeline_status() -> tuple[str, int, str]:
@@ -301,8 +274,8 @@ async def get_results(
     """
     Return full pipeline results for the Next.js frontend.
 
-    Prefers outputs/results_manifest.json (written by Final Output Agent).
-    Falls back to outputs/evaluation_summary.json for backward compatibility.
+    Loads outputs/results_manifest.json (written by Stage 10 — Final Output).
+    Returns 404 if the manifest does not exist yet.
     """
     try:
         dataset_uuid = uuid.UUID(dataset_id)
@@ -317,24 +290,17 @@ async def get_results(
             status_code=404, detail=f"Dataset '{dataset_id}' not found."
         )
 
-    # Prefer the full manifest written by Stage 10
     manifest = _load_results_manifest()
-    if manifest:
-        return JSONResponse(content=manifest)
-
-    # Backward-compat: return evaluation_summary if manifest not yet written
-    evaluation_summary = _load_evaluation_summary()
-    if not evaluation_summary:
+    if not manifest:
         raise HTTPException(
             status_code=404,
-            detail="Pipeline results not found. Run POST /api/pipeline/run first.",
+            detail=(
+                "Pipeline results not found. "
+                "Run POST /api/pipeline/run first, or wait for Stage 10 to complete."
+            ),
         )
 
-    return JSONResponse(content={
-        "dataset_id": dataset_id,
-        "evaluation_summary": evaluation_summary,
-        "available_downloads": _available_downloads(dataset_id),
-    })
+    return JSONResponse(content=manifest)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

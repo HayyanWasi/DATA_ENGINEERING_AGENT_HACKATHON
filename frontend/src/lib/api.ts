@@ -15,6 +15,14 @@ export interface PipelineStatus {
   last_stage: string;
 }
 
+export interface Metrics {
+  accuracy: number;
+  f1: number;
+  precision: number;
+  recall: number;
+  roc_auc: number;
+}
+
 export interface ModelComparison {
   model: string;
   accuracy: number;
@@ -22,36 +30,63 @@ export interface ModelComparison {
   status: string;
 }
 
+export interface DatasetInfo {
+  target_col: string;
+  original_shape: [number, number];
+  cleaned_shape: [number, number];
+  engineered_features: number;
+}
+
+export interface ModelInfo {
+  final_model_name: string;
+  tuning_applied: boolean;
+  smote_applied: boolean;
+  performance_rating: string;
+}
+
+export interface PipelineSummary {
+  dataset_info: DatasetInfo;
+  model_info: ModelInfo;
+  metrics: Metrics;
+  model_comparison: ModelComparison[];
+  balance_info: Record<string, unknown>;
+  tuning_info: Record<string, unknown>;
+}
+
+export interface EdaSection {
+  charts: string[];
+  chart_count: number;
+}
+
+export interface ModelEvaluationSection {
+  charts: string[];
+  chart_count: number;
+  metrics: Metrics;
+  model_comparison: ModelComparison[];
+  performance_rating: string;
+}
+
 export interface ResultsManifest {
   dataset_id: string;
-  target_col: string;
-  elapsed_seconds: number;
-  pipeline_summary: {
-    model_used: string;
-    performance_rating: string;
-    accuracy: number;
-    f1: number;
-    precision: number;
-    recall: number;
-    roc_auc: number;
-    smote_applied: boolean;
-    tuning_applied: boolean;
-    best_params: Record<string, unknown>;
-    model_comparison: ModelComparison[];
-  };
-  eda_charts: string[];
-  dataset_stats: { rows: number; features: number };
+  pipeline_summary: PipelineSummary;
+  eda_section: EdaSection;
+  model_evaluation_section: ModelEvaluationSection;
   downloads: Array<{ file_type: string; filename: string; url: string }>;
-  // backward-compat fields from old endpoint
-  evaluation_summary?: Record<string, unknown>;
-  available_downloads?: Array<{ file_type: string; url: string; path: string }>;
+  /** Flat chart arrays written by build_results_manifest (also in sections above) */
+  eda_charts?: string[];
+  evaluation_charts?: string[];
+  output_files?: {
+    model_files: string[];
+    data_files: string[];
+    evaluation_charts: string[];
+    eda_charts: string[];
+    json_reports: string[];
+  };
 }
 
 // ─── Upload ───────────────────────────────────────────────────────────────────
 
-export async function importDataset(
-  file: File,
-): Promise<ImportResponse> {
+export async function importDataset(file: File): Promise<ImportResponse> {
   const form = new FormData();
   form.append("user_id", "frontend_user");
   form.append("dataset_name", file.name);
@@ -69,12 +104,9 @@ export async function importDataset(
   return res.json();
 }
 
-// ─── Pipeline ────────────────────────────────────────────────────────────────
+// ─── Pipeline ─────────────────────────────────────────────────────────────────
 
-/**
- * Fire-and-forget pipeline run.
- * Navigates away immediately; backend runs in background.
- */
+/** Fire-and-forget — navigates away immediately; backend runs in background. */
 export function startPipelineRun(datasetId: string, targetCol: string): void {
   fetch(`${API_BASE}/api/pipeline/run`, {
     method: "POST",
@@ -83,31 +115,32 @@ export function startPipelineRun(datasetId: string, targetCol: string): void {
   }).catch((err) => console.error("[pipeline/run]", err));
 }
 
-export async function fetchPipelineStatus(
-  datasetId: string,
-): Promise<PipelineStatus> {
+export async function fetchPipelineStatus(datasetId: string): Promise<PipelineStatus> {
   const res = await fetch(`${API_BASE}/api/pipeline/status/${datasetId}`);
   if (!res.ok) throw new Error(`Status fetch failed: ${res.status}`);
   return res.json();
 }
 
-// ─── Results ─────────────────────────────────────────────────────────────────
+// ─── Results ──────────────────────────────────────────────────────────────────
 
-export async function fetchResults(
-  datasetId: string,
-): Promise<ResultsManifest> {
+export async function fetchResults(datasetId: string): Promise<ResultsManifest> {
   const res = await fetch(`${API_BASE}/api/results/${datasetId}`);
-  if (!res.ok) throw new Error(`Results fetch failed: ${res.status}`);
+  if (!res.ok) throw new Error(`Results fetch failed (${res.status})`);
   return res.json();
 }
 
 // ─── Charts & Downloads ───────────────────────────────────────────────────────
 
+/**
+ * Build the URL for a chart image served by GET /api/charts/{datasetId}/{filename}.
+ * chartPath can be a full path ("charts/foo.png") or just a filename ("foo.png").
+ */
 export function getChartUrl(datasetId: string, chartPath: string): string {
   const filename = chartPath.split("/").pop() ?? chartPath;
   return `${API_BASE}/api/charts/${datasetId}/${encodeURIComponent(filename)}`;
 }
 
+/** Open a pipeline output file download in a new tab. */
 export function downloadFile(datasetId: string, fileType: string): void {
   window.open(`${API_BASE}/api/download/${datasetId}/${fileType}`, "_blank");
 }

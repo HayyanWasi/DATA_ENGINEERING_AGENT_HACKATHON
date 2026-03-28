@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
 import {
   CheckCircle2,
@@ -8,6 +8,7 @@ import {
   AlertCircle,
   Sparkles,
   Zap,
+  Clock,
 } from "lucide-react";
 import { motion } from "motion/react";
 import { Navbar } from "@/components/Navbar";
@@ -39,9 +40,11 @@ export default function PipelinePage() {
   const fileName = searchParams.get("fileName") ?? "dataset.csv";
   const targetColumn = searchParams.get("targetColumn") ?? "target";
 
-  const [status, setStatus] = useState<PipelineStatus | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [status, setStatus]   = useState<PipelineStatus | null>(null);
+  const [error, setError]     = useState<string | null>(null);
   const [started, setStarted] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const startRef              = useRef<number | null>(null);
 
   useEffect(() => {
     if (!datasetId || started) return;
@@ -70,9 +73,24 @@ export default function PipelinePage() {
     return () => clearInterval(poll);
   }, [datasetId, targetColumn, fileName, router, started]);
 
+  // Elapsed-time counter — ticks every second while the pipeline is running
+  useEffect(() => {
+    if (!started) return;
+    if (startRef.current === null) startRef.current = Date.now();
+    const timer = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - startRef.current!) / 1000));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [started]);
+
   const stagesCompleted = status?.stages_completed ?? 0;
-  const progress = Math.round((stagesCompleted / STAGES.length) * 100);
-  const currentStage = status?.last_stage ?? "Starting…";
+  const progress        = Math.round((stagesCompleted / STAGES.length) * 100);
+  const currentStage    = status?.last_stage ?? "Starting…";
+
+  function formatElapsed(s: number): string {
+    if (s < 60) return `${s}s`;
+    return `${Math.floor(s / 60)}m ${s % 60}s`;
+  }
 
   return (
     <div className="min-h-screen bg-[#0D0F14] relative overflow-hidden">
@@ -139,7 +157,15 @@ export default function PipelinePage() {
             <span className="text-gray-400">
               {stagesCompleted === 0 ? "Initialising…" : currentStage}
             </span>
-            <span className="text-purple-400 font-semibold">{progress}%</span>
+            <div className="flex items-center gap-3">
+              {elapsed > 0 && (
+                <span className="flex items-center gap-1 text-gray-500 text-xs tabular-nums">
+                  <Clock className="w-3 h-3" />
+                  {formatElapsed(elapsed)}
+                </span>
+              )}
+              <span className="text-purple-400 font-semibold">{progress}%</span>
+            </div>
           </div>
           <div className="h-3 rounded-full bg-zinc-800 overflow-hidden">
             <motion.div

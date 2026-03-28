@@ -37,6 +37,7 @@ from typing import Any
 from google.adk.agents import Agent
 from google.adk.tools import FunctionTool
 
+from app.tools.content_guardrail import check_content_guardrail
 from app.agents.datacleaning_agent.analyzer_agent import (
     analyzer_agent,
     run_analyzer,
@@ -308,6 +309,27 @@ async def run_pipeline(
         }
 
     _log(f"Validation passed — {len(records)} rows, {len(column_names)} columns.")
+
+    # ── Content safety guardrail ─────────────────────────────────────────────
+    guardrail = check_content_guardrail(
+        records=records,
+        target_column=target_column,
+        column_names=column_names,
+    )
+    if not guardrail["allowed"]:
+        _log("[GUARDRAIL] Dataset REJECTED by content safety check.")
+        return {
+            "dataset_id": dataset_id,
+            "target_column": target_column,
+            "stages_attempted": 0,
+            "stages_completed": 0,
+            "analysis": None,
+            "strategy": None,
+            "execution": None,
+            "errors": [guardrail["message"]],
+            "pipeline_log": "\n".join(log_lines),
+        }
+    _log("Content safety guardrail passed.")
 
     stages_planned = 2 if skip_executor else 3
 
