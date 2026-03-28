@@ -106,19 +106,34 @@ export async function importDataset(file: File): Promise<ImportResponse> {
 
 // ─── Pipeline ─────────────────────────────────────────────────────────────────
 
-/** Fire-and-forget — navigates away immediately; backend runs in background. */
-export function startPipelineRun(datasetId: string, targetCol: string): void {
-  fetch(`${API_BASE}/api/pipeline/run`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ dataset_id: datasetId, target_col: targetCol }),
-  }).catch((err) => console.error("[pipeline/run]", err));
+/** Run pipeline — resolves with quota_exhausted flag if quota is hit. */
+export async function startPipelineRun(
+  datasetId: string,
+  targetCol: string,
+  apiKey: string,
+): Promise<{ quota_exhausted: boolean } | null> {
+  try {
+    const res = await fetch(`${API_BASE}/api/pipeline/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dataset_id: datasetId, target_col: targetCol, api_key: apiKey }),
+    });
+    if (res.status === 429) return { quota_exhausted: true };
+    return null;
+  } catch (err) {
+    console.error("[pipeline/run]", err);
+    return null;
+  }
 }
 
 export async function fetchPipelineStatus(datasetId: string): Promise<PipelineStatus> {
   const res = await fetch(`${API_BASE}/api/pipeline/status/${datasetId}`);
   if (!res.ok) throw new Error(`Status fetch failed: ${res.status}`);
   return res.json();
+}
+
+export async function cancelPipeline(datasetId: string): Promise<void> {
+  await fetch(`${API_BASE}/api/pipeline/cancel/${datasetId}`, { method: "POST" });
 }
 
 // ─── Results ──────────────────────────────────────────────────────────────────

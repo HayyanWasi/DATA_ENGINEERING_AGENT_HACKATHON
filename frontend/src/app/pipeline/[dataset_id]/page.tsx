@@ -15,6 +15,7 @@ import { Navbar } from "@/components/Navbar";
 import {
   fetchPipelineStatus,
   startPipelineRun,
+  cancelPipeline,
   type PipelineStatus,
 } from "@/lib/api";
 
@@ -39,19 +40,27 @@ export default function PipelinePage() {
   const datasetId = params.dataset_id as string;
   const fileName = searchParams.get("fileName") ?? "dataset.csv";
   const targetColumn = searchParams.get("targetColumn") ?? "target";
+  const apiKey = searchParams.get("apiKey") ?? "";
 
-  const [status, setStatus]   = useState<PipelineStatus | null>(null);
-  const [error, setError]     = useState<string | null>(null);
-  const [started, setStarted] = useState(false);
-  const [elapsed, setElapsed] = useState(0);
-  const startRef              = useRef<number | null>(null);
+  const [status, setStatus]       = useState<PipelineStatus | null>(null);
+  const [error, setError]         = useState<string | null>(null);
+  const [started, setStarted]     = useState(false);
+  const [elapsed, setElapsed]     = useState(0);
+  const [stopping, setStopping]   = useState(false);
+  const startRef                  = useRef<number | null>(null);
+  const pollRef                   = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     if (!datasetId || started) return;
     setStarted(true);
 
-    // Fire-and-forget — backend runs all stages; we poll for progress
-    startPipelineRun(datasetId, targetColumn);
+    // Run pipeline — detect quota errors from the response
+    startPipelineRun(datasetId, targetColumn, apiKey).then((res) => {
+      if (res?.quota_exhausted) {
+        if (pollRef.current) clearInterval(pollRef.current);
+        setError("Process terminated — your API key quota has been exhausted. Please use a different API key.");
+      }
+    });
 
     const poll = setInterval(async () => {
       try {
@@ -63,12 +72,16 @@ export default function PipelinePage() {
           router.push(`/results?${q}`);
         } else if (s.status === "failed") {
           clearInterval(poll);
-          setError("Pipeline failed. Check backend logs.");
+          const msg = s.last_stage?.includes("RESOURCE_EXHAUSTED") || s.last_stage?.includes("quota")
+            ? "Process terminated — your API key quota has been exhausted. Please use a different API key."
+            : "Pipeline failed. Check backend logs.";
+          setError(msg);
         }
       } catch {
         // transient network error — keep polling
       }
     }, 2000);
+    pollRef.current = poll;
 
     return () => clearInterval(poll);
   }, [datasetId, targetColumn, fileName, router, started]);
@@ -86,6 +99,17 @@ export default function PipelinePage() {
   const stagesCompleted = status?.stages_completed ?? 0;
   const progress        = Math.round((stagesCompleted / STAGES.length) * 100);
   const currentStage    = status?.last_stage ?? "Starting…";
+
+  async function handleStop() {
+    setStopping(true);
+    if (pollRef.current) clearInterval(pollRef.current);
+    try {
+      await cancelPipeline(datasetId);
+    } catch {
+      // best-effort
+    }
+    router.push("/");
+  }
 
   function formatElapsed(s: number): string {
     if (s < 60) return `${s}s`;
@@ -139,10 +163,29 @@ export default function PipelinePage() {
           <motion.div
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="mb-8 p-5 rounded-2xl border border-red-500/30 bg-red-500/10 flex items-center gap-3"
+            className={`mb-8 p-5 rounded-2xl border flex flex-col gap-3 ${
+              error.includes("quota")
+                ? "border-orange-500/40 bg-orange-500/10"
+                : "border-red-500/30 bg-red-500/10"
+            }`}
           >
-            <AlertCircle className="w-6 h-6 text-red-400 shrink-0" />
-            <p className="text-red-300">{error}</p>
+            <div className="flex items-start gap-3">
+              <AlertCircle className={`w-6 h-6 shrink-0 mt-0.5 ${error.includes("quota") ? "text-orange-400" : "text-red-400"}`} />
+              <div>
+                <p className={`font-semibold ${error.includes("quota") ? "text-orange-300" : "text-red-300"}`}>
+                  {error.includes("quota") ? "API Quota Exhausted" : "Pipeline Failed"}
+                </p>
+                <p className={`text-sm mt-1 ${error.includes("quota") ? "text-orange-400/80" : "text-red-400/80"}`}>
+                  {error}
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => router.push("/")}
+              className="self-start px-4 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-gray-300 text-sm transition-colors"
+            >
+              ← Go back &amp; try a new API key
+            </button>
           </motion.div>
         )}
 
@@ -185,6 +228,40 @@ export default function PipelinePage() {
             {stagesCompleted} / {STAGES.length} stages complete
           </p>
         </motion.div>
+
+        {/* Stop button */}
+        {!error && (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.3 }}
+            className="mb-6 flex justify-center"
+          >
+            <motion.button
+              whileHover={{ scale: stopping ? 1 : 1.03 }}
+              whileTap={{ scale: stopping ? 1 : 0.97 }}
+              onClick={handleStop}
+              disabled={stopping}
+              className="flex items-center gap-2 px-6 py-3 rounded-xl border border-red-500/40 bg-red-500/10 text-red-400 hover:bg-red-500/20 hover:border-red-500/60 transition-all duration-200 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {stopping ? (
+                <>
+                  <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: "linear" }}>
+                    <Loader2 className="w-4 h-4" />
+                  </motion.div>
+                  Stopping…
+                </>
+              ) : (
+                <>
+                  <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                    <rect x="6" y="6" width="12" height="12" rx="2" />
+                  </svg>
+                  Stop Pipeline
+                </>
+              )}
+            </motion.button>
+          </motion.div>
+        )}
 
         {/* Stage list */}
         <motion.div

@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
@@ -25,7 +25,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
 from models.dataset import UserDataset
-from app.agents.master_orchestrator import PipelineStageError, run_full_pipeline
+from app.agents.master_orchestrator import (
+    PipelineCancelledError,
+    PipelineStageError,
+    cancel_pipeline,
+    run_full_pipeline,
+)
 
 router = APIRouter()
 
@@ -39,6 +44,8 @@ class PipelineRunRequest(BaseModel):
     """UUID of the previously imported dataset."""
     target_col: str
     """Name of the ML target / prediction column."""
+    api_key: Optional[str] = None
+    """Google Gemini API key provided by the user."""
 
 
 class PipelineSummary(BaseModel):
@@ -182,14 +189,30 @@ async def run_pipeline_endpoint(
             ),
         )
 
-    # 4. Run full pipeline
+    # 4. Set API key from request if provided
+    if body.api_key:
+        os.environ["GOOGLE_API_KEY"] = body.api_key
+
+    # 5. Run full pipeline
     try:
         pipeline_result = await run_full_pipeline(
             dataset_id=body.dataset_id,
             records=raw_data,
             target_col=body.target_col,
         )
+    except PipelineCancelledError:
+        raise HTTPException(status_code=499, detail="Pipeline cancelled by user.")
     except PipelineStageError as exc:
+        error_str = str(exc)
+        if "RESOURCE_EXHAUSTED" in error_str or "quota" in error_str.lower():
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "error": "Process terminated — your API key quota has been exhausted. Please use a different API key.",
+                    "stage_name": exc.stage_name,
+                    "original_error": str(exc.original_error),
+                },
+            )
         raise HTTPException(
             status_code=500,
             detail={
@@ -260,6 +283,21 @@ async def pipeline_status(
         stages_completed=stages_completed,
         last_stage=last_stage,
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ENDPOINT 2b — POST /api/pipeline/cancel/{dataset_id}
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.post("/api/pipeline/cancel/{dataset_id}")
+async def cancel_pipeline_endpoint(dataset_id: str) -> JSONResponse:
+    """Signal the running pipeline to stop at the next stage boundary."""
+    try:
+        uuid.UUID(dataset_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid dataset_id (must be a UUID).")
+    cancel_pipeline(dataset_id)
+    return JSONResponse(content={"status": "cancelling", "dataset_id": dataset_id})
 
 
 # ─────────────────────────────────────────────────────────────────────────────

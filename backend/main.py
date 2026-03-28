@@ -1,6 +1,10 @@
 from contextlib import asynccontextmanager
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from database import init_db
 from models import UserDataset  # noqa: F401 — registers model with Base.metadata
@@ -17,6 +21,14 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Data Engineering Agent API", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://localhost:3001"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.include_router(import_data_router)
 app.include_router(analyze_router)
 app.include_router(strategize_router)

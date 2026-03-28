@@ -253,6 +253,27 @@ function ResultsContent() {
     return !name.startsWith("distribution_") && !name.startsWith("comparison_");
   });
 
+  // No datasetId — user landed here without a valid pipeline session
+  if (!datasetId) {
+    return (
+      <div className="min-h-screen bg-[#0D0F14] flex flex-col items-center justify-center gap-6 px-6">
+        <AlertCircle className="w-12 h-12 text-red-400" />
+        <div className="text-center">
+          <p className="text-red-300 font-medium text-xl mb-2">No pipeline session found</p>
+          <p className="text-gray-500 text-sm">
+            The dataset upload may have failed. Please go back and try again.
+          </p>
+        </div>
+        <Button
+          onClick={() => router.push("/")}
+          className="bg-gradient-to-r from-purple-600 to-cyan-600 text-white border-0"
+        >
+          Go Back
+        </Button>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#0D0F14] relative overflow-hidden">
       {/* Ambient blobs */}

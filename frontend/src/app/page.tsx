@@ -29,6 +29,10 @@ export default function Upload() {
   const [isHovering, setIsHovering] = useState(false);
   const [datasetId, setDatasetId] = useState<string>("");
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [columns, setColumns] = useState<string[]>([]);
+  const [targetColumn, setTargetColumn] = useState<string>("");
+  const [apiKey, setApiKey] = useState<string>("");
+  const [apiKeyError, setApiKeyError] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -49,6 +53,8 @@ export default function Upload() {
         setTimeout(() => {
           setDatasetId(res.dataset_id);
           setFileName(file.name);
+          setColumns(res.columns);
+          setTargetColumn(res.columns[res.columns.length - 1] ?? "");
           setIsUploading(false);
           setUploadProgress(0);
         }, 300);
@@ -81,14 +87,17 @@ export default function Upload() {
 
   const handleRunPipeline = () => {
     if (!fileName && !sqlConnection) return;
+    setApiKeyError(null);
+    if (!apiKey.trim()) {
+      setApiKeyError("Please enter your LLM API key to run the pipeline.");
+      return;
+    }
     const sourceName = fileName || "database_connection";
 
     if (datasetId) {
-      // Real flow: go to pipeline progress page (which fires the run)
-      const query = new URLSearchParams({ fileName: sourceName }).toString();
+      const query = new URLSearchParams({ fileName: sourceName, targetColumn, apiKey: apiKey.trim() }).toString();
       router.push(`/pipeline/${datasetId}?${query}`);
     } else {
-      // Fallback (no backend): go directly to results with mock data
       const query = new URLSearchParams({ fileName: sourceName }).toString();
       router.push(`/results?${query}`);
     }
@@ -184,7 +193,7 @@ export default function Upload() {
             transition={{ delay: 0.5, duration: 0.6 }}
             className="text-xl text-gray-400"
           >
-            Powered by Google Gemini + ADK multi-agent pipeline
+            Created by Team Coloners — a multi-agent ML system
           </motion.p>
         </motion.div>
 
@@ -292,6 +301,81 @@ export default function Upload() {
                     delay={0.7}
                   />
                 </motion.div>
+
+                {/* API Key Input */}
+                <motion.div
+                  initial={{ opacity: 0, y: -10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.65 }}
+                  className="mb-6 p-4 rounded-xl border border-yellow-500/30 bg-yellow-500/5"
+                >
+                  <label className="block text-sm font-medium text-gray-300 mb-2 flex items-center gap-2">
+                    <svg className="w-4 h-4 text-yellow-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+                    </svg>
+                    LLM API Key <span className="text-red-400">*</span>
+                  </label>
+                  <input
+                    type="password"
+                    value={apiKey}
+                    onChange={(e) => { setApiKey(e.target.value); setApiKeyError(null); }}
+                    placeholder="AIzaSy..."
+                    className="w-full bg-zinc-900 border border-zinc-700 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-yellow-500 placeholder-zinc-600"
+                  />
+                  <p className="text-xs text-gray-500 mt-1.5">Enter your LLM API key to power the pipeline</p>
+                </motion.div>
+
+                {apiKeyError && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="mb-4 p-3 rounded-xl border border-red-500/30 bg-red-500/10 flex items-center gap-2"
+                  >
+                    <svg className="w-4 h-4 text-red-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                    </svg>
+                    <p className="text-red-300 text-sm">{apiKeyError}</p>
+                  </motion.div>
+                )}
+
+                {columns.length > 0 && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="mb-6 p-4 rounded-xl border border-purple-500/30 bg-purple-500/10"
+                  >
+                    <label className="block text-sm font-medium text-gray-300 mb-2">
+                      Target Column (what to predict)
+                    </label>
+                    <select
+                      value={targetColumn}
+                      onChange={(e) => setTargetColumn(e.target.value)}
+                      className="w-full bg-zinc-900 border border-zinc-700 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-purple-500"
+                    >
+                      {columns.map((col) => (
+                        <option key={col} value={col}>
+                          {col.trim()}
+                        </option>
+                      ))}
+                    </select>
+                  </motion.div>
+                )}
+
+                {uploadError && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="mb-4 p-4 rounded-xl border border-red-500/30 bg-red-500/10 flex items-start gap-3"
+                  >
+                    <svg className="w-5 h-5 text-red-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                    </svg>
+                    <div>
+                      <p className="text-red-300 font-medium text-sm">Upload failed — backend may not be running</p>
+                      <p className="text-red-400/70 text-xs mt-1">{uploadError}</p>
+                    </div>
+                  </motion.div>
+                )}
 
                 <motion.div
                   initial={{ opacity: 0, y: 20 }}

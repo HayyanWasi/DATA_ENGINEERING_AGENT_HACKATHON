@@ -41,8 +41,34 @@ logger = logging.getLogger(__name__)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Custom exception
+# Cancellation registry
 # ─────────────────────────────────────────────────────────────────────────────
+
+_cancelled_pipelines: set[str] = set()
+
+
+def cancel_pipeline(dataset_id: str) -> None:
+    """Signal that the pipeline for this dataset should stop."""
+    _cancelled_pipelines.add(dataset_id)
+
+
+def _check_cancelled(dataset_id: str) -> None:
+    """Raise PipelineCancelledError if a stop was requested."""
+    if dataset_id in _cancelled_pipelines:
+        _cancelled_pipelines.discard(dataset_id)
+        raise PipelineCancelledError(dataset_id)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Custom exceptions
+# ─────────────────────────────────────────────────────────────────────────────
+
+class PipelineCancelledError(Exception):
+    """Raised when the user requests pipeline cancellation."""
+    def __init__(self, dataset_id: str) -> None:
+        self.dataset_id = dataset_id
+        super().__init__(f"Pipeline cancelled by user for dataset: {dataset_id}")
+
 
 class PipelineStageError(Exception):
     """Raised when a blocking pipeline stage fails."""
@@ -272,6 +298,8 @@ async def run_full_pipeline(
 
     cleaned_records = _load_csv("outputs/cleaned_data.csv") or records
 
+    _check_cancelled(dataset_id)
+
     # ─────────────────────────────────────────────────────────────────────────
     # STAGE 2 — EDA  (non-blocking)
     # ─────────────────────────────────────────────────────────────────────────
@@ -298,6 +326,8 @@ async def run_full_pipeline(
         eda_result = {"status": "skipped", "charts": {}, "errors": [msg]}
 
     chart_paths = _collect_eda_charts(eda_result)
+
+    _check_cancelled(dataset_id)
 
     # ─────────────────────────────────────────────────────────────────────────
     # STAGE 3 — Feature Engineering  (blocking)
@@ -332,6 +362,8 @@ async def run_full_pipeline(
     engineered_records = _load_csv("outputs/engineered_data.csv") or cleaned_records
     encoded_cols: list[str] = fe_result.get("features_encoded", [])
     transformed_cols: list[str] = fe_result.get("features_transformed", [])
+
+    _check_cancelled(dataset_id)
 
     # ─────────────────────────────────────────────────────────────────────────
     # STAGE 4 — Feature Scaling  (blocking)
@@ -375,6 +407,8 @@ async def run_full_pipeline(
     stage_start = time.time()
     logger.info("[STAGE 5/9] Class Imbalance starting...")
     _log("[STAGE 5/9] Class Imbalance starting.")
+
+    _check_cancelled(dataset_id)
 
     y_train_raw = _SANDBOX.get("y_train")
     y_test_raw = _SANDBOX.get("y_test")
@@ -454,6 +488,8 @@ async def run_full_pipeline(
 
     best_model_name = str(mt_result.get("best_model", ""))
 
+    _check_cancelled(dataset_id)
+
     # ─────────────────────────────────────────────────────────────────────────
     # STAGE 7 — Model Selection  (non-blocking)
     # ─────────────────────────────────────────────────────────────────────────
@@ -508,6 +544,8 @@ async def run_full_pipeline(
         }
 
     final_model_name = str(ht_result.get("best_model_name") or best_model_name)
+
+    _check_cancelled(dataset_id)
 
     # ─────────────────────────────────────────────────────────────────────────
     # STAGE 9 — Model Evaluation  (blocking)
