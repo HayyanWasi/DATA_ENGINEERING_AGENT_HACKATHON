@@ -8,7 +8,6 @@ import {
   FileText,
   Sparkles,
   CloudUpload,
-  Tag,
   Zap,
   ArrowRight,
   FileSpreadsheet,
@@ -23,7 +22,7 @@ import { Label } from "@/components/ui/label";
 export default function Upload() {
   const router = useRouter();
   const [fileName, setFileName] = useState<string>("");
-  const [targetColumn, setTargetColumn] = useState<string>("");
+  const [sqlConnection, setSqlConnection] = useState<string>("");
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -81,14 +80,16 @@ export default function Upload() {
   };
 
   const handleRunPipeline = () => {
-    if (!fileName || !targetColumn) return;
+    if (!fileName && !sqlConnection) return;
+    const sourceName = fileName || "database_connection";
+
     if (datasetId) {
       // Real flow: go to pipeline progress page (which fires the run)
-      const query = new URLSearchParams({ fileName, targetColumn }).toString();
+      const query = new URLSearchParams({ fileName: sourceName }).toString();
       router.push(`/pipeline/${datasetId}?${query}`);
     } else {
       // Fallback (no backend): go directly to results with mock data
-      const query = new URLSearchParams({ fileName, targetColumn }).toString();
+      const query = new URLSearchParams({ fileName: sourceName }).toString();
       router.push(`/results?${query}`);
     }
   };
@@ -286,31 +287,23 @@ export default function Upload() {
                     icon={<Database className="w-4 h-4 text-cyan-400" />}
                     placeholder="postgresql://user:password@host:port/database"
                     label="SQL Connection String"
+                    value={sqlConnection}
+                    onChange={(e) => setSqlConnection(e.target.value)}
                     delay={0.7}
                   />
                 </motion.div>
 
-                <FrostedInput
-                  id="target-column"
-                  icon={<Tag className="w-4 h-4 text-pink-400" />}
-                  placeholder="e.g., salary, churn, price"
-                  label="Target Column Name"
-                  value={targetColumn}
-                  onChange={(e) => setTargetColumn(e.target.value)}
-                  delay={0.8}
-                />
-
                 <motion.div
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: 0.9 }}
+                  transition={{ delay: 0.8 }}
                   className="mt-8"
                 >
                   <motion.button
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.98 }}
                     onClick={handleRunPipeline}
-                    disabled={!fileName || !targetColumn}
+                    disabled={!fileName && !sqlConnection}
                     type="button"
                     className="w-full bg-gradient-to-r from-purple-600 via-pink-600 to-cyan-600 hover:from-purple-500 hover:via-pink-500 hover:to-cyan-500 text-white py-7 text-lg font-bold rounded-2xl shadow-2xl shadow-purple-500/40 disabled:opacity-40 disabled:cursor-not-allowed transition-all duration-300 relative overflow-hidden group border-0 inline-flex items-center justify-center gap-2"
                   >
